@@ -92,52 +92,81 @@ namespace AppInstaller::Repository::Microsoft
             }
         }
 
+        // Put installed packages into the index
+        void PopulateIndex(SQLiteIndex& index)
+        {
+            ARPHelper arpHelper;
+            arpHelper.PopulateIndexFromARP(index, Manifest::ManifestInstaller::ScopeEnum::Machine);
+            arpHelper.PopulateIndexFromARP(index, Manifest::ManifestInstaller::ScopeEnum::User);
+
+            PopulateIndexFromMSIX(index);
+        }
+
         // The factory for the predefined installed source.
         struct Factory : public ISourceFactory
         {
-            std::shared_ptr<ISource> Create(const SourceDetails& details, IProgressCallback& progress) override final
-            {
-                // TODO: Maybe we do need to use it?
-                UNREFERENCED_PARAMETER(progress);
+            // The name that we use for the CrossProcessReaderWriteLock
+            constexpr static std::string_view c_lockName = "WinGet_SysInstCache"sv;
+            constexpr static std::string_view c_localCacheRelativeDirectory = "WinGet/SysInstCache"sv;
+            constexpr static std::string_view c_cacheFileName = "cache.db"sv;
+            constexpr static std::string_view c_sourceName = "*PredefinedInstalledSource"sv;
 
+            static std::filesystem::path GetCacheDirectory()
+            {
+                std::filesystem::path result = Runtime::GetPathTo(Runtime::PathName::LocalCache);
+                result /= c_localCacheRelativeDirectory;
+                return result;
+            }
+
+            std::shared_ptr<ISource> Create(const SourceDetails& details, IProgressCallback&) override final
+            {
                 THROW_HR_IF(E_INVALIDARG, details.Type != PredefinedInstalledSourceFactory::Type());
 
-                // Determine the filter
-                PredefinedInstalledSourceFactory::Filter filter = PredefinedInstalledSourceFactory::StringToFilter(details.Arg);
-                AICLI_LOG(Repo, Info, << "Creating PredefinedInstalledSource with filter [" << PredefinedInstalledSourceFactory::FilterToString(filter) << ']');
+                std::filesystem::path cacheDirectory = GetCacheDirectory();
+                std::filesystem::path cacheFile = cacheDirectory / c_cacheFileName;
+
+                // Attempt to use the cached index; if this fails then fall back to creating an in memory index.
+                try
+                {
+                    // The read lock here indicates a use of the existing file; we may also write to the database.
+                    // It should be thought of as shared access.
+                    auto sharedLock = Synchronization::CrossProcessReaderWriteLock::LockForRead(c_lockName);
+                }
+                CATCH_LOG();
+
+                // If we did not return the existing cache, attempt to create it anew.
+                try
+                {
+                    {
+                        // The write lock here indicates that we will remove the existing file.
+                        // It should be thought of as exclusive access.
+                        auto exclusiveLock = Synchronization::CrossProcessReaderWriteLock::LockForWrite(c_lockName);
+
+                        // Remove all files in the cache directory before proceeding.
+                        std::filesystem::remove_all(cacheDirectory);
+
+                        std::filesystem::create_directories(cacheDirectory);
+
+                        SQLiteIndex index = SQLiteIndex::CreateNew(cacheFile.u8string());
+                        PopulateIndex(index);
+                    }
+
+                    // Reacquire a shared lock and reopen the index for further use.
+                    auto sharedLock = Synchronization::CrossProcessReaderWriteLock::LockForRead(c_lockName);
+                    SQLiteIndex index = SQLiteIndex::Open(cacheFile.u8string(), SQLiteIndex::OpenDisposition::Read);
+
+                    return std::make_shared<SQLiteIndexSource>(details, std::string{ c_sourceName }, std::move(index), std::move(sharedLock), true);
+                }
+                CATCH_LOG();
+
+                // If we did not return the new cache, attempt to create an in memory cache to hobble along.
+                AICLI_LOG(Repo, Info, << "Creating PredefinedInstalledSource in memory");
 
                 // Create an in memory index
                 SQLiteIndex index = SQLiteIndex::CreateNew(SQLITE_MEMORY_DB_CONNECTION_TARGET, Schema::Version::Latest());
+                PopulateIndex(index);
 
-                // Put installed packages into the index
-                std::optional<ARPHelper> arpHelper;
-
-                if (filter == PredefinedInstalledSourceFactory::Filter::None || filter == PredefinedInstalledSourceFactory::Filter::ARP_System)
-                {
-                    if (!arpHelper)
-                    {
-                        arpHelper = ARPHelper();
-                    }
-
-                    arpHelper->PopulateIndexFromARP(index, Manifest::ManifestInstaller::ScopeEnum::Machine);
-                }
-
-                if (filter == PredefinedInstalledSourceFactory::Filter::None || filter == PredefinedInstalledSourceFactory::Filter::ARP_User)
-                {
-                    if (!arpHelper)
-                    {
-                        arpHelper = ARPHelper();
-                    }
-
-                    arpHelper->PopulateIndexFromARP(index, Manifest::ManifestInstaller::ScopeEnum::User);
-                }
-
-                if (filter == PredefinedInstalledSourceFactory::Filter::None || filter == PredefinedInstalledSourceFactory::Filter::MSIX)
-                {
-                    PopulateIndexFromMSIX(index);
-                }
-
-                return std::make_shared<SQLiteIndexSource>(details, "*PredefinedInstalledSource", std::move(index), Synchronization::CrossProcessReaderWriteLock{}, true);
+                return std::make_shared<SQLiteIndexSource>(details, std::string{ c_sourceName }, std::move(index), Synchronization::CrossProcessReaderWriteLock{}, true);
             }
 
             void Add(SourceDetails&, IProgressCallback&) override final
@@ -158,43 +187,6 @@ namespace AppInstaller::Repository::Microsoft
                 THROW_HR(E_NOTIMPL);
             }
         };
-    }
-
-    std::string_view PredefinedInstalledSourceFactory::FilterToString(Filter filter)
-    {
-        switch (filter)
-        {
-        case AppInstaller::Repository::Microsoft::PredefinedInstalledSourceFactory::Filter::None:
-            return "None"sv;
-        case AppInstaller::Repository::Microsoft::PredefinedInstalledSourceFactory::Filter::ARP_System:
-            return "ARP_System"sv;
-        case AppInstaller::Repository::Microsoft::PredefinedInstalledSourceFactory::Filter::ARP_User:
-            return "ARP_User"sv;
-        case AppInstaller::Repository::Microsoft::PredefinedInstalledSourceFactory::Filter::MSIX:
-            return "MSIX"sv;
-        default:
-            return "Unknown"sv;
-        }
-    }
-
-    PredefinedInstalledSourceFactory::Filter PredefinedInstalledSourceFactory::StringToFilter(std::string_view filter)
-    {
-        if (filter == FilterToString(Filter::ARP_System))
-        {
-            return Filter::ARP_System;
-        }
-        else if (filter == FilterToString(Filter::ARP_User))
-        {
-            return Filter::ARP_User;
-        }
-        else if (filter == FilterToString(Filter::MSIX))
-        {
-            return Filter::MSIX;
-        }
-        else
-        {
-            return Filter::None;
-        }
     }
 
     std::unique_ptr<ISourceFactory> PredefinedInstalledSourceFactory::Create()

@@ -41,6 +41,9 @@ namespace AppInstaller::Runtime
         UserFileSettings,
         // The location where secure settings data is stored.
         SecureSettings,
+        // The local cache (file) storage location.
+        // Files stored here can be removed with only performance impacts.
+        LocalCache,
     };
 
     // Gets the path to the requested location.

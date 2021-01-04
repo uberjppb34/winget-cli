@@ -17,6 +17,7 @@ namespace AppInstaller::Runtime
         constexpr std::string_view s_DefaultTempDirectory = "WinGet"sv;
         constexpr std::string_view s_AppDataDir_Settings = "Settings"sv;
         constexpr std::string_view s_AppDataDir_State = "State"sv;
+        constexpr std::string_view s_AppDataDir_Cache = "Cache"sv;
         constexpr std::string_view s_SecureSettings_Base = "Microsoft/WinGet"sv;
         constexpr std::string_view s_SecureSettings_UserRelative = "settings"sv;
         constexpr std::string_view s_SecureSettings_Relative_Unpackaged = "win"sv;
@@ -279,6 +280,9 @@ namespace AppInstaller::Runtime
                 result /= GetPackageName();
                 create = false;
                 break;
+            case PathName::LocalCache:
+                result.assign(appStorage.LocalCacheFolder().Path().c_str());
+                break;
             default:
                 THROW_HR(E_UNEXPECTED);
             }
@@ -316,6 +320,9 @@ namespace AppInstaller::Runtime
                 result /= s_SecureSettings_UserRelative;
                 result /= s_SecureSettings_Relative_Unpackaged;
                 create = false;
+                break;
+            case PathName::LocalCache:
+                result = GetPathToAppDataDir(s_AppDataDir_Cache);
                 break;
             default:
                 THROW_HR(E_UNEXPECTED);

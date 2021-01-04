@@ -703,21 +703,8 @@ namespace AppInstaller::Repository
 
         switch (source)
         {
-        case PredefinedSource::Installed:
+        case PredefinedSource::SystemInstalled:
             details.Type = Microsoft::PredefinedInstalledSourceFactory::Type();
-            details.Arg = Microsoft::PredefinedInstalledSourceFactory::FilterToString(Microsoft::PredefinedInstalledSourceFactory::Filter::None);
-            return CreateSourceFromDetails(details, progress);
-        case PredefinedSource::ARP_System:
-            details.Type = Microsoft::PredefinedInstalledSourceFactory::Type();
-            details.Arg = Microsoft::PredefinedInstalledSourceFactory::FilterToString(Microsoft::PredefinedInstalledSourceFactory::Filter::ARP_System);
-            return CreateSourceFromDetails(details, progress);
-        case PredefinedSource::ARP_User:
-            details.Type = Microsoft::PredefinedInstalledSourceFactory::Type();
-            details.Arg = Microsoft::PredefinedInstalledSourceFactory::FilterToString(Microsoft::PredefinedInstalledSourceFactory::Filter::ARP_User);
-            return CreateSourceFromDetails(details, progress);
-        case PredefinedSource::MSIX:
-            details.Type = Microsoft::PredefinedInstalledSourceFactory::Type();
-            details.Arg = Microsoft::PredefinedInstalledSourceFactory::FilterToString(Microsoft::PredefinedInstalledSourceFactory::Filter::MSIX);
             return CreateSourceFromDetails(details, progress);
         }
 
