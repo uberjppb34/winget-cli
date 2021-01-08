@@ -114,6 +114,7 @@ namespace AppInstaller::Repository
     // These sources are not under the direct control of the user, such as packages installed on the system.
     enum class PredefinedSource
     {
+        Installed,
         SystemInstalled,
     };
 

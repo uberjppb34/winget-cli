@@ -11,6 +11,8 @@
 #include <winget/Registry.h>
 #include <AppInstallerArchitecture.h>
 
+#include <set>
+
 using namespace std::string_literals;
 using namespace std::string_view_literals;
 
@@ -18,6 +20,14 @@ namespace AppInstaller::Repository::Microsoft
 {
     namespace
     {
+        // Determines if the existing index is acceptable, or should be completely recreated.
+        bool ShouldRecreateCache(SQLiteIndex& index)
+        {
+            // TODO: Implement me
+            UNREFERENCED_PARAMETER(index);
+            return false;
+        }
+
         // Populates the index with the entries from MSIX.
         void PopulateIndexFromMSIX(SQLiteIndex& index)
         {
@@ -102,11 +112,37 @@ namespace AppInstaller::Repository::Microsoft
             PopulateIndexFromMSIX(index);
         }
 
+        // Update installed packages in the index
+        void UpdateIndex(SQLiteIndex& index)
+        {
+            // Get all unique ids in the index; create a set for easy removal in updates
+            auto allIds = index.Search({});
+            std::set<SQLite::rowid_t> idsSet;
+
+            for (const auto& result : allIds.Matches)
+            {
+                idsSet.insert(result.first);
+            }
+
+            ARPHelper arpHelper;
+            arpHelper.UpdateIndexFromARP(index, Manifest::ManifestInstaller::ScopeEnum::Machine, idsSet);
+            arpHelper.UpdateIndexFromARP(index, Manifest::ManifestInstaller::ScopeEnum::User, idsSet);
+
+            UpdateIndexFromMSIX(index, idsSet);
+
+            // Any values still in the set were not found during inventory; remove them from the index
+            for (const auto& id : idsSet)
+            {
+                index.RemoveManifestsById(id);
+            }
+        }
+
         // The factory for the predefined installed source.
         struct Factory : public ISourceFactory
         {
             // The name that we use for the CrossProcessReaderWriteLock
-            constexpr static std::string_view c_lockName = "WinGet_SysInstCache"sv;
+            constexpr static std::string_view c_fileLockName = "WinGet_SysInstCacheFile"sv;
+            constexpr static std::wstring_view c_contentsMutexName = L"WinGet_SysInstCacheContents"sv;
             constexpr static std::string_view c_localCacheRelativeDirectory = "WinGet/SysInstCache"sv;
             constexpr static std::string_view c_cacheFileName = "cache.db"sv;
             constexpr static std::string_view c_sourceName = "*PredefinedInstalledSource"sv;
@@ -118,6 +154,24 @@ namespace AppInstaller::Repository::Microsoft
                 return result;
             }
 
+            // Due to the time it takes to build out the view of the packages installed outside of our
+            // control, we create a cache index. For synchronization, two CrossProcessReaderWriteLocks
+            // will be used; one controls access to the file, while the other controls updating the
+            // contents.
+            //  1. Acquire a SHARED FILE lock.
+            //  2. Attempt to acquire an EXCLUSIVE CONTENTS lock with a timeout of 0.
+            //      a. If the EXCLUSIVE CONTENTS lock is acquired, update the existing cache CONTENTS.
+            //          i. Release the EXCLUSIVE CONTENTS lock.
+            //      b. If the EXCLUSIVE CONTENTS lock is not acquired, acquire a SHARED CONTENTS lock.
+            //          i. This is simply to wait for the EXCLUSIVE CONTENTS lock to be released.
+            //  3. If the existing cache is acceptable to use (schema version, cache version, etc.) return it.
+            //  NOTE: Upon reaching this point, the cache should be recreated.
+            //  4. Acquire an EXCLUSIVE FILE lock.
+            //  5. Delete the existing cache FILE.
+            //  6. Create a new cache FILE from scratch.
+            //  7. Release the EXCLUSIVE FILE lock.
+            //  8. Acquire a SHARED FILE lock.
+            //  9. Return the cache.
             std::shared_ptr<ISource> Create(const SourceDetails& details, IProgressCallback&) override final
             {
                 THROW_HR_IF(E_INVALIDARG, details.Type != PredefinedInstalledSourceFactory::Type());
@@ -125,22 +179,45 @@ namespace AppInstaller::Repository::Microsoft
                 std::filesystem::path cacheDirectory = GetCacheDirectory();
                 std::filesystem::path cacheFile = cacheDirectory / c_cacheFileName;
 
-                // Attempt to use the cached index; if this fails then fall back to creating an in memory index.
+                // Attempt to use the cached index.
                 try
                 {
-                    // The read lock here indicates a use of the existing file; we may also write to the database.
-                    // It should be thought of as shared access.
-                    auto sharedLock = Synchronization::CrossProcessReaderWriteLock::LockForRead(c_lockName);
+                    // The lock here indicates a use of the existing file; we may also write to the database.
+                    auto sharedFileLock = Synchronization::CrossProcessReaderWriteLock::LockShared(c_fileLockName);
+                    SQLiteIndex index = SQLiteIndex::Open(cacheFile.u8string(), SQLiteIndex::OpenDisposition::ReadWrite);
+
+                    if (!ShouldRecreateCache(index))
+                    {
+                        {
+                            wil::unique_mutex contentsLock;
+                            contentsLock.create(c_contentsMutexName.data(), 0, SYNCHRONIZE);
+
+                            DWORD status = 0;
+                            auto exclusiveContentsLock = contentsLock.acquire(&status, 0);
+
+                            if (exclusiveContentsLock)
+                            {
+                                UpdateIndex(index);
+                            }
+                            else
+                            {
+                                // We are simply waiting for the exclusiveContentsLock to be released by the other process.
+                                contentsLock.acquire();
+                            }
+                        }
+
+                        return std::make_shared<SQLiteIndexSource>(details, std::string{ c_sourceName }, std::move(index), std::move(sharedFileLock), true);
+                    }
                 }
                 CATCH_LOG();
 
                 // If we did not return the existing cache, attempt to create it anew.
+                // If this fails then fall back to creating an in memory index.
                 try
                 {
                     {
-                        // The write lock here indicates that we will remove the existing file.
-                        // It should be thought of as exclusive access.
-                        auto exclusiveLock = Synchronization::CrossProcessReaderWriteLock::LockForWrite(c_lockName);
+                        // The lock here indicates that we will remove the existing file.
+                        auto exclusiveFileLock = Synchronization::CrossProcessReaderWriteLock::LockExclusive(c_fileLockName);
 
                         // Remove all files in the cache directory before proceeding.
                         std::filesystem::remove_all(cacheDirectory);
@@ -152,10 +229,10 @@ namespace AppInstaller::Repository::Microsoft
                     }
 
                     // Reacquire a shared lock and reopen the index for further use.
-                    auto sharedLock = Synchronization::CrossProcessReaderWriteLock::LockForRead(c_lockName);
+                    auto sharedFileLock = Synchronization::CrossProcessReaderWriteLock::LockShared(c_fileLockName);
                     SQLiteIndex index = SQLiteIndex::Open(cacheFile.u8string(), SQLiteIndex::OpenDisposition::Read);
 
-                    return std::make_shared<SQLiteIndexSource>(details, std::string{ c_sourceName }, std::move(index), std::move(sharedLock), true);
+                    return std::make_shared<SQLiteIndexSource>(details, std::string{ c_sourceName }, std::move(index), std::move(sharedFileLock), true);
                 }
                 CATCH_LOG();
 

@@ -54,7 +54,7 @@ namespace AppInstaller::Repository::Microsoft
             {
                 THROW_HR_IF(E_INVALIDARG, details.Type != PreIndexedPackageSourceFactory::Type());
 
-                auto lock = Synchronization::CrossProcessReaderWriteLock::LockForRead(CreateNameForCPRWL(details));
+                auto lock = Synchronization::CrossProcessReaderWriteLock::LockShared(CreateNameForCPRWL(details));
                 return CreateInternal(details, std::move(lock), progress);
             }
 
@@ -87,7 +87,7 @@ namespace AppInstaller::Repository::Microsoft
 
                 details.Data = Msix::GetPackageFamilyNameFromFullName(fullName);
 
-                auto lock = Synchronization::CrossProcessReaderWriteLock::LockForWrite(CreateNameForCPRWL(details));
+                auto lock = Synchronization::CrossProcessReaderWriteLock::LockExclusive(CreateNameForCPRWL(details));
 
                 UpdateInternal(packageLocation, details, progress);
             }
@@ -98,7 +98,7 @@ namespace AppInstaller::Repository::Microsoft
 
                 std::string packageLocation = GetPackageLocation(details);
 
-                auto lock = Synchronization::CrossProcessReaderWriteLock::LockForWrite(CreateNameForCPRWL(details));
+                auto lock = Synchronization::CrossProcessReaderWriteLock::LockExclusive(CreateNameForCPRWL(details));
 
                 UpdateInternal(packageLocation, details, progress);
             }
@@ -108,7 +108,7 @@ namespace AppInstaller::Repository::Microsoft
             void Remove(const SourceDetails& details, IProgressCallback& progress) override final
             {
                 THROW_HR_IF(E_INVALIDARG, details.Type != PreIndexedPackageSourceFactory::Type());
-                auto lock = Synchronization::CrossProcessReaderWriteLock::LockForWrite(CreateNameForCPRWL(details));
+                auto lock = Synchronization::CrossProcessReaderWriteLock::LockExclusive(CreateNameForCPRWL(details));
 
                 RemoveInternal(details, progress);
             }

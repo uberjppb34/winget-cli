@@ -703,6 +703,9 @@ namespace AppInstaller::Repository
 
         switch (source)
         {
+            // Currently we will just fall through, but eventually Installed with be a join of SystemInstalled and
+            // our own installed packages.
+        case PredefinedSource::Installed:
         case PredefinedSource::SystemInstalled:
             details.Type = Microsoft::PredefinedInstalledSourceFactory::Type();
             return CreateSourceFromDetails(details, progress);

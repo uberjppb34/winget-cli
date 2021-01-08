@@ -133,11 +133,10 @@ void VerifyEntryAgainstIndex(const SQLiteIndex& index, SQLiteIndex::IdType manif
     VerifyMetadataString(metadata, PackageVersionMetadata::SilentUninstallCommand, entry.QuietUninstallString);
 }
 
-std::shared_ptr<ISource> CreatePredefinedInstalledSource(Factory::Filter filter = Factory::Filter::None)
+std::shared_ptr<ISource> CreatePredefinedInstalledSource()
 {
     SourceDetails details;
     details.Type = Factory::Type();
-    details.Arg = Factory::FilterToString(filter);
 
     TestProgress progress;
 

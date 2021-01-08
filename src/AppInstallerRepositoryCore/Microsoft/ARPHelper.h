@@ -7,6 +7,7 @@
 #include <winget/ManifestInstaller.h>
 #include <wil/resource.h>
 
+#include <set>
 #include <string>
 
 namespace AppInstaller::Repository::Microsoft
@@ -69,9 +70,18 @@ namespace AppInstaller::Repository::Microsoft
         // Handles all of the architectures for the given scope.
         void PopulateIndexFromARP(SQLiteIndex& index, Manifest::ManifestInstaller::ScopeEnum scope) const;
 
+        // Updates the index with the ARP entries from the given scope (machine/user).
+        // Handles all of the architectures for the given scope.
+        void UpdateIndexFromARP(SQLiteIndex& index, Manifest::ManifestInstaller::ScopeEnum scope, std::set<SQLite::rowid_t>& existingIds) const;
+
         // Populates the index with the ARP entries from the given key.
-        // This entry point is primarily to allow unit tests to operate of arbitrary keys;
+        // This entry point is primarily to allow unit tests to operate off arbitrary keys;
         // product code should use PopulateIndexFromARP.
         void PopulateIndexFromKey(SQLiteIndex& index, const Registry::Key& key, std::string_view scope, std::string_view architecture) const;
+
+        // Updates the index with the ARP entries from the given key.
+        // This entry point is primarily to allow unit tests to operate off arbitrary keys;
+        // product code should use UpdateIndexFromARP.
+        void UpdateIndexFromKey(SQLiteIndex& index, const Registry::Key& key, std::string_view scope, std::string_view architecture, std::set<SQLite::rowid_t>& existingIds) const;
     };
 }
